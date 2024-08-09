@@ -93,7 +93,7 @@ with torch.cuda.stream(stream):
     timer.stop(stream)
 ```
 
-Possible output.
+Possible output, the `start` and `end` are Unix timestamps created by python's `time.time()`.
 ```csv
    id          name         start           end  duration          metadata
 0   1  without sync  1.723192e+09  1.723192e+09  0.000340              None
