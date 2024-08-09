@@ -2,20 +2,30 @@ import time
 import torch
 import pandas as pd
 from globaler import Timer
+import torch
+import torch.nn.functional as F
 
+
+X = torch.randn((4096, 5120), device='cuda')
+W = torch.randn((16384, 5120), device='cuda')
 
 stream = torch.cuda.Stream()
 timer = Timer()
 
+Y = F.linear(X, W)
+
 with torch.cuda.stream(stream):
-    torch.linalg.eig(torch.randn(1000, 1000).cuda())
-    timer.start("sync")
-    torch.linalg.eig(torch.randn(1000, 1000).cuda())
-    timer.stop(stream)
-    timer.start("nosync")
-    torch.linalg.eig(torch.randn(1000, 1000).cuda())
+    timer.start("without sync")
+    Y = F.linear(X, W)
     timer.stop()
-    
+
+    timer.start("with sync")
+    Y = F.linear(X, W)
+    timer.stop(torch.cuda)
+
+timer.start("with sync")
+Y = F.linear(X, W)
+timer.stop(torch.cuda)
 
 timer.start("Outer", metadata={"key": "value"})
 time.sleep(0.1)
