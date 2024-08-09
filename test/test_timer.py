@@ -1,5 +1,6 @@
 import time
 import torch
+import pandas as pd
 from globaler import Timer
 
 
@@ -25,6 +26,9 @@ timer.stop()
 timer.start("Another")
 time.sleep(0.5)
 timer.stop()
-print(timer.as_json())
-print(timer.flatten())
-timer.to_json("result.json")
+print(timer.to_json())
+print(timer.to_list())
+print(timer.to_csv())
+print(pd.DataFrame(timer.to_csv()))
+timer.save_json("result.json")
+timer.save_csv("result.csv")

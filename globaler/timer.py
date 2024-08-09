@@ -1,12 +1,14 @@
 import time
 import json
+import pandas as pd
 
 
 class TimeRecord:
-    def __init__(self, start: float, name=None, metadata: dict = None):
+    def __init__(self, start: float, name=None, metadata: dict = None, id: int = None):
         self.name = name or "unamed"
         self.start = start
         self.metadata = metadata
+        self.id = id
         self.end: float = 0
         self.childs = []
         self.parent = None
@@ -34,18 +36,19 @@ class TimeRecord:
     
     def to_dict(self):
         return {
+            "id": self.id,
             "name": self.name,
             "start": self.start,
             "end": self.end,
             "duration": self.duration,
             "metadata": self.metadata,
-            "childs": [child.to_dict() for child in self.childs]
+            "childs": [child.to_dict() for child in self.childs],
         }
     
     def to_json(self) -> str:
         return json.dumps(self.to_dict(), indent=2)
 
-    def flatten(self):
+    def to_list(self):
         def flatten_obj(self):
             flat_list = [self]
             for child in self.childs:
@@ -56,10 +59,12 @@ class TimeRecord:
         ret = []
         for obj in flat:
             ret.append({
+                "id": obj.id,
                 "name": obj.name,
                 "start": obj.start,
                 "end": obj.end,
                 "duration": obj.duration,
+                "metadata": obj.metadata,
             })
             if obj.metadata is not None:
                 ret[-1].update(obj.metadata)
@@ -68,15 +73,15 @@ class TimeRecord:
 
 class Timer:
     def __init__(self):
-        self.records = []
+        self.records: list[TimeRecord] = []
         self.runnings = []
         self.counter = 0
 
     def start(self, name: str = None, metadata = None):
+        self.counter += 1
         if name is None:
             name = f"#{self.counter}"
-            self.counter += 1
-        cur = TimeRecord(start=time.time(), name=name, metadata=metadata)
+        cur = TimeRecord(start=time.time(), name=name, metadata=metadata, id=self.counter)
         self.runnings.append(cur)
         if len(self.runnings) == 1:
             self.records.append(cur)
@@ -91,18 +96,49 @@ class Timer:
         self.runnings[-1].stop(time.time())
         self.runnings.pop()
 
-    def as_json(self):
+    def to_json(self):
         return json.dumps([record.to_dict() for record in self.records], indent=2)
 
-    def to_json(self, filename):
+    def save_json(self, filename):
         with open(filename, "w+") as f:
-            f.write(self.as_json())
-
-    def flatten(self):
+            f.write(self.to_json())
+            
+    def to_list(self):
         ret = []
         for record in self.records:
-            ret.extend(record.flatten())
+            ret.extend(record.to_list())
         return ret
+    
+    def save_list(self, filename):
+        with open(filename, "w+") as f:
+            f.write(json.dumps(self.to_list(), indent=2))
+    
+    def to_csv(self):
+        ret = {
+            "id": [],
+            "name": [],
+            "start": [],
+            "end": [],
+            "duration": [],
+            "metadata": [],
+        }
+        for record in self.records:
+            flat = record.to_list()
+            for item in flat:
+                ret["id"].append(item["id"])
+                ret["name"].append(item["name"])
+                ret["start"].append(item["start"])
+                ret["end"].append(item["end"])
+                ret["duration"].append(item["duration"])
+                ret["metadata"].append(str(item["metadata"]))
+        return ret
+    
+    def to_dataframe(self):
+        return pd.DataFrame(self.to_csv())
+    
+    def save_csv(self, filename):
+        df = pd.DataFrame(self.to_csv())
+        df.to_csv(filename, index=False)
 
     def __str__(self) -> str:
         ret = f"Timer<{hex(id(self))}> [\n"
