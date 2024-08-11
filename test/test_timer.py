@@ -11,6 +11,7 @@ W = torch.randn((16384, 5120), device='cuda')
 
 stream = torch.cuda.Stream()
 timer = Timer()
+timer.enabled = False
 
 Y = F.linear(X, W)
 

@@ -74,11 +74,10 @@ class TimeRecord:
 
 
 class Timer(EnableForDebug):
-    def __init__(self, enabled=True):
+    def __init__(self):
         self.records: list[TimeRecord] = []
         self.runnings = []
         self.counter = 0
-        self.enabled = enabled
 
     def start(self, name: str = None, metadata = None):
         self.counter += 1
