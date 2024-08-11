@@ -8,14 +8,6 @@ import torch.nn.functional as F
 import os
 
 
-
-csv = Timer.json_to_csv(open("/home/lzj/work/llm-infer/AMotivation/results/timer/2024-08-11_21:29:46.json").read())
-with open("/home/lzj/work/llm-infer/AMotivation/results/timer/2024-08-11_21:29:46.csv", "w+") as f:
-    f.write(pd.DataFrame(csv).to_csv())
-
-exit(1)
-
-
 X = torch.randn((4096, 5120), device='cuda')
 W = torch.randn((16384, 5120), device='cuda')
 

@@ -114,6 +114,24 @@ class Timer(EnableForDebug):
     def save_json(self, filename):
         with open(filename, "w+") as f:
             f.write(self.to_json())
+
+    @classmethod
+    def _init_from_json(cls, loader, path_or_json):
+        items = loader(path_or_json)
+        timer = cls()
+        for item in items:
+            record = TimeRecord.from_args(**item)
+            timer.records.append(record)
+        return timer
+    
+    @classmethod
+    def from_json(cls, json_str):
+        return cls._init_from_json(json.loads, json_str)
+    
+    @classmethod
+    def read_json(cls, path):
+        with open(path, "r") as fin:
+            return cls._init_from_json(json.load, fin)
             
     def to_list(self):
         ret = []
@@ -124,29 +142,6 @@ class Timer(EnableForDebug):
     def save_list(self, filename):
         with open(filename, "w+") as f:
             f.write(json.dumps(self.to_list(), indent=2))
-    
-    @staticmethod
-    def json_to_csv(json_str):
-        data = json.loads(json_str)
-        ret = {
-            "id": [],
-            "name": [],
-            "start": [],
-            "end": [],
-            "duration": [],
-            "metadata": [],
-        }
-        for record in data:
-            flat = TimeRecord.from_args(**record).to_list()
-            for item in flat:
-                ret["id"].append(item["id"])
-                ret["name"].append(item["name"])
-                ret["start"].append(item["start"])
-                ret["end"].append(item["end"])
-                ret["duration"].append(item["duration"])
-                ret["metadata"].append(str(item["metadata"]))
-        return ret
-        
     
     def to_csv(self):
         ret = {
