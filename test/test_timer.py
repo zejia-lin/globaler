@@ -15,7 +15,7 @@ timer = Timer()
 Y = F.linear(X, W)
 
 with torch.cuda.stream(stream):
-    timer.start("without sync")
+    timer.start(name="without sync")
     Y = F.linear(X, W)
     timer.stop()
 

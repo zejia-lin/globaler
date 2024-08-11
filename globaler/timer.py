@@ -2,6 +2,8 @@ import time
 import json
 import pandas as pd
 
+from .enabler import EnableForDebug
+
 
 class TimeRecord:
     def __init__(self, start: float, name=None, metadata: dict = None, id: int = None):
@@ -71,11 +73,12 @@ class TimeRecord:
         return ret
 
 
-class Timer:
-    def __init__(self):
+class Timer(EnableForDebug):
+    def __init__(self, enabled=True):
         self.records: list[TimeRecord] = []
         self.runnings = []
         self.counter = 0
+        self.enabled = enabled
 
     def start(self, name: str = None, metadata = None):
         self.counter += 1
