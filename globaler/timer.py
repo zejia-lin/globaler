@@ -2,7 +2,7 @@ import time
 import json
 import pandas as pd
 
-from .enabler import EnableForDebug
+from .enabler import DebugOnly
 
 
 class TimeRecord:
@@ -83,7 +83,7 @@ class TimeRecord:
         return ret
 
 
-class Timer(EnableForDebug):
+class Timer(DebugOnly):
     def __init__(self):
         self.records: list[TimeRecord] = []
         self.runnings = []

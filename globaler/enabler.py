@@ -25,8 +25,16 @@ def enabler(method):
 
 class _EnablerMetaClass(type):
     def __new__(cls, name, bases, dct):
-        cls.enabled = True
-        cls.debug_only = True
+        if len(bases) > 0:
+            for c in bases:
+                if issubclass(c, (DebugOnly, Enabled)):
+                    enabler_base_cls = c
+                    break
+            cls.enabled = enabler_base_cls.enabled
+            cls.debug_only = enabler_base_cls.debug_only
+        else: 
+            cls.enabled = dct.get("enabled")
+            cls.debug_only = dct.get("debug_only")
         for attr_name, attr_value in dct.items():
             if isinstance(attr_value, types.FunctionType) and not (
                 attr_name.startswith("__") and attr_name.endswith("__")
@@ -37,8 +45,18 @@ class _EnablerMetaClass(type):
         return super().__new__(cls, name, bases, dct)
 
 
-class EnableForDebug(metaclass=_EnablerMetaClass):
+class DebugOnly(metaclass=_EnablerMetaClass):
+    enabled = True
+    debug_only = True
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
         cls.enabled = True
         cls.debug_only = True
+
+class Enabled(metaclass=_EnablerMetaClass):
+    enabled = True
+    debug_only = False
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        cls.enabled = True
+        cls.debug_only = False
