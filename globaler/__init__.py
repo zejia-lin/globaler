@@ -1,16 +1,20 @@
 from .timer import Timer
+from .enabler import DebugOnly, Enabled, debug_only
 
 __version__ = "0.1.0"
 
 __all__ = [
     "Timer",
     "getTimer",
-    "getDict",
+    "getGlobal",
+    "DebugOnly",
+    "Enabled",
+    "debug_only",
 ]
 
 _global_dict = {}
 
-def getDict():
+def getGlobal():
     return _global_dict
 
 _global_timer = Timer()
