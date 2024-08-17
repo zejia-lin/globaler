@@ -5,6 +5,7 @@ from typing import ParamSpec, TypeVar, Union, Generic, Type
 import multiprocessing as mp
 import multiprocessing.shared_memory as shm
 import pickle
+import typing
 import zmq
 import zmq.asyncio
 import asyncio
@@ -38,46 +39,44 @@ def shorten_large_obj(obj, max_len=100):
 
 
 class ProtoBase:
-    def establish(self, *args, **kwargs):
+    def establish(self):
         return self
 
-    def connect(self, *args, **kwargs):
+    def connect(self):
         return self
 
-    def close(self, *args, **kwargs):
+    def close(self):
         pass
 
-    async def recv(self):
+    async def recv(self) -> bytes:
         raise NotImplementedError
 
-    async def recv_multipart(self):
+    async def recv_multipart(self) -> bytes:
         raise NotImplementedError
 
-    async def send(self, message):
+    async def send(self, message: bytes):
         raise NotImplementedError
 
-    async def send_multipart(self, message):
+    async def send_multipart(self, message: bytes):
         raise NotImplementedError
 
 
 class ZmqProto(ProtoBase):
-    def __init__(self):
-        self.port: int = None
-        self.server_address: str = None
+    def __init__(self, port=5555, host="tcp://127.0.0.1"):
+        self.port = port
+        self.host = host
+        self.server_address = f"{host}:{port}"
         self.context: zmq.asyncio.Context = None
         self.socket: zmq.asyncio.Socket = None
 
-    def establish(self, port=5555):
-        self.port = port
-        self.server_address = f"tcp://127.0.0.1:{port}"
+    def establish(self):
         self.context = zmq.asyncio.Context()
         self.socket = self.context.socket(zmq.ROUTER)
         self.socket.bind(self.server_address)
         logger.info(f"Server established on {self.server_address}")
         return self
 
-    def connect(self, port=5555, host="tcp://127.0.0.1"):
-        self.server_address = f"{host}:{port}"
+    def connect(self):
         self.context = zmq.asyncio.Context()
         self.socket = self.context.socket(zmq.DEALER)
         self.socket.connect(self.server_address)
@@ -106,7 +105,7 @@ class ZmqProto(ProtoBase):
         await self.socket.send_multipart(message)
 
 
-class QueueProto(ProtoBase):
+class MpQueueProto(ProtoBase):
     def __init__(self):
         self.queue = mp.Queue()
 
@@ -122,7 +121,7 @@ class QueueProto(ProtoBase):
         self.queue.put(message)
 
     async def send_multipart(self, message):
-        return await self.send(message[1])
+        await self.send(message[1])
 
 
 class PipeProto(ProtoBase):
@@ -131,10 +130,10 @@ class PipeProto(ProtoBase):
         self.client_get, self.client_put = mp.get_context("spawn").Pipe()
         self.server = self.RealPipe(self.server_get, self.client_put)
         self.client = self.RealPipe(self.client_get, self.server_put)
-        
+
     def establish(self, *args, **kwargs):
         return self.server
-    
+
     def connect(self, *args, **kwargs):
         return self.client
 
@@ -155,9 +154,77 @@ class PipeProto(ProtoBase):
         async def send(self, message):
             logger.debug(f"  Send message '{shorten_large_obj(message)}'")
             self.in_pipe.send_bytes(message)
-            
+
         async def send_multipart(self, message):
-            return await self.send(message[1])
+            await self.send(message[1])
+
+
+class SharedMemProto(ProtoBase):
+    def __init__(self, queue_factory=mp.Queue, capacity=10 * 1024 * 1024):
+        self.capacity = capacity
+        self.server_write = shm.SharedMemory("liz.rpc_server_write", True, capacity)
+        self.client_write = shm.SharedMemory("liz.rpc_client_write", True, capacity)
+        self.server_queue = queue_factory()
+        self.client_queue = queue_factory()
+        for i in range(5):
+            self.server_write.buf[:] = b"\x00" * self.capacity
+            x = bytes(self.server_write.buf[:])
+            self.client_write.buf[:] = b"\x00" * self.capacity
+            x = bytes(self.server_write.buf[:])
+
+    def __del__(self):
+        self.server_write.close()
+        self.server_write.unlink()
+        self.client_write.close()
+        self.client_write.unlink()
+
+    def establish(self, *args, **kwargs):
+        return self.RealSharedMem(
+            self.client_write, self.server_write, self.client_queue, self.server_queue
+        )
+
+    def connect(self, *args, **kwargs):
+        return self.RealSharedMem(
+            self.server_write, self.client_write, self.server_queue, self.client_queue
+        )
+
+    class RealSharedMem(ProtoBase):
+
+        def __init__(
+            self,
+            read_shm: smem.SharedMemory,
+            write_shm: smem.SharedMemory,
+            read_offset,
+            write_offset,
+        ):
+            self.read_shm = read_shm
+            self.write_shm = write_shm
+            self.read_offset = read_offset
+            self.write_offset = write_offset
+
+        def __del__(self):
+            self.read_shm.close()
+            self.write_shm.close()
+
+        async def recv(self):
+            offset = self.read_offset.get()
+            message = bytes(self.read_shm.buf[:offset])
+            return message
+
+        async def recv_multipart(self):
+            message = await self.recv()
+            return None, message
+
+        async def send(self, message):
+            msg_sz = len(message)
+            if msg_sz > self.write_shm.size:
+                raise ValueError("Message size exceeds shared memory capacity.")
+
+            self.write_shm.buf[:msg_sz] = message
+            self.write_offset.put(msg_sz)
+
+        async def send_multipart(self, message):
+            await self.send(message[1])
 
 
 class RPCServer:

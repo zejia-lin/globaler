@@ -6,7 +6,7 @@ import time
 import multiprocessing as mp
 
 from globaler import RPCClient, RPCServer, ZmqProto
-from globaler.rpc import PipeProto
+from globaler.rpc import PipeProto, SharedMemProto
 
 
 class MyClass:
@@ -27,14 +27,14 @@ class MyClass:
 
 
 def serve(proto_factory):
-    proto = proto_factory.establish(5555)
+    proto = proto_factory.establish()
     server = RPCServer(MyClass(), proto)
     asyncio.run(server.run())
 
 
 def client(proto_factory):
     repeat = 10
-    proto = proto_factory.connect(5555)
+    proto = proto_factory.connect()
     cc = RPCClient(MyClass, proto)
     print(f"Local pid {os.getpid()}")
     print(f"Remote pid {asyncio.run(cc.getpid())}")
@@ -43,6 +43,7 @@ def client(proto_factory):
     print(f"Remote add sync {asyncio.run(cc.add_sync(1, 2))}")
 
     large_data = "xxx" * 10**6
+    print("dta len", len(large_data))
     for i in range(10):
         response = asyncio.run(cc.send_large_data(large_data))
 
@@ -56,7 +57,7 @@ def client(proto_factory):
 
 
 def same_proc():
-    proto = PipeProto()
+    proto = SharedMemProto(mp.Queue)
     mp.Process(target=serve, args=(proto,)).start()
     time.sleep(1)
     mp.Process(target=client, args=(proto,)).start()
