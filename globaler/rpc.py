@@ -1,6 +1,9 @@
 from functools import wraps, partial
+from multiprocessing.connection import Connection
+import select
 from typing import ParamSpec, TypeVar, Union, Generic, Type
 import multiprocessing as mp
+import multiprocessing.shared_memory as shm
 import pickle
 import zmq
 import zmq.asyncio
@@ -18,6 +21,9 @@ from .logger import get_logger
 T = TypeVar("T")
 _pickler = pickle
 logger = get_logger(logging.INFO)
+from multiprocessing import shared_memory as smem
+
+smem.SharedMemory
 
 
 def shorten_large_obj(obj, max_len=100):
@@ -33,10 +39,10 @@ def shorten_large_obj(obj, max_len=100):
 
 class ProtoBase:
     def establish(self, *args, **kwargs):
-        pass
+        return self
 
     def connect(self, *args, **kwargs):
-        pass
+        return self
 
     def close(self, *args, **kwargs):
         pass
@@ -68,12 +74,14 @@ class ZmqProto(ProtoBase):
         self.socket = self.context.socket(zmq.ROUTER)
         self.socket.bind(self.server_address)
         logger.info(f"Server established on {self.server_address}")
+        return self
 
     def connect(self, port=5555, host="tcp://127.0.0.1"):
         self.server_address = f"{host}:{port}"
         self.context = zmq.asyncio.Context()
         self.socket = self.context.socket(zmq.DEALER)
         self.socket.connect(self.server_address)
+        return self
 
     def close(self):
         self.socket.close()
@@ -115,6 +123,41 @@ class QueueProto(ProtoBase):
 
     async def send_multipart(self, message):
         return await self.send(message[1])
+
+
+class PipeProto(ProtoBase):
+    def __init__(self):
+        self.server_get, self.server_put = mp.get_context("spawn").Pipe()
+        self.client_get, self.client_put = mp.get_context("spawn").Pipe()
+        self.server = self.RealPipe(self.server_get, self.client_put)
+        self.client = self.RealPipe(self.client_get, self.server_put)
+        
+    def establish(self, *args, **kwargs):
+        return self.server
+    
+    def connect(self, *args, **kwargs):
+        return self.client
+
+    class RealPipe(ProtoBase):
+        def __init__(self, in_pipe: Connection, out_pipe: Connection):
+            self.in_pipe = in_pipe
+            self.out_pipe = out_pipe
+
+        async def recv(self):
+            message = self.out_pipe.recv_bytes()
+            logger.debug(f"  Got message '{shorten_large_obj(message)}'")
+            return message
+
+        async def recv_multipart(self):
+            message = await self.recv()
+            return None, message
+
+        async def send(self, message):
+            logger.debug(f"  Send message '{shorten_large_obj(message)}'")
+            self.in_pipe.send_bytes(message)
+            
+        async def send_multipart(self, message):
+            return await self.send(message[1])
 
 
 class RPCServer:
@@ -218,4 +261,3 @@ def RPCClient(cls: Type[T], proto: ProtoBase) -> T:
             return rpc_method
 
     return RPCClientProxy(cls, proto)
-

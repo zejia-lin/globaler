@@ -4,6 +4,7 @@ import asyncio
 import time
 
 from globaler import RPCClient, RPCServer, ZmqProto
+from globaler.rpc import SharedMemProto
 
 
 class MyClass:
@@ -24,7 +25,7 @@ class MyClass:
 
 
 async def serve():
-    proto = ZmqProto()
+    proto = SharedMemProto(create=True, size=1024*1024)
     proto.establish(5555)
     server = RPCServer(MyClass(), proto)
     task = asyncio.create_task(server.run())
@@ -34,7 +35,7 @@ async def serve():
 
 async def client():
     repeat = 10
-    proto = ZmqProto()
+    proto = SharedMemProto(create=False, size=1024*1024)
     proto.connect(5555)
     cc = RPCClient(MyClass, proto)
     print(f"Local pid {os.getpid()}")
