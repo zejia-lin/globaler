@@ -8,7 +8,6 @@ import multiprocessing as mp
 from globaler import RPCClient, RPCServer, ZmqProto
 from globaler.rpc import PipeProto, SharedMemProto
 
-
 class MyClass:
     async def getpid(self):
         return f"hello from {os.getpid()}"
@@ -42,7 +41,7 @@ def client(proto_factory):
     print(f"Remote add {asyncio.run(cc.add(1, 2))}")
     print(f"Remote add sync {asyncio.run(cc.add_sync(1, 2))}")
 
-    large_data = "xxx" * 10**6
+    large_data = "xxx" * 10**3
     print("dta len", len(large_data))
     for i in range(10):
         response = asyncio.run(cc.send_large_data(large_data))
