@@ -25,7 +25,7 @@ class MyClass:
 
 
 async def serve():
-    proto = SharedMemProto(create=True, capacity=1024*1024)
+    proto = SharedMemProto(create=True, size_per_slot=1024*1024)
     proto.establish(5555)
     server = RPCServer(MyClass(), proto)
     task = asyncio.create_task(server.run())
@@ -35,7 +35,7 @@ async def serve():
 
 async def client():
     repeat = 10
-    proto = SharedMemProto(create=False, capacity=1024*1024)
+    proto = SharedMemProto(create=False, size_per_slot=1024*1024)
     proto.connect(5555)
     cc = RPCClient(MyClass, proto)
     print(f"Local pid {os.getpid()}")

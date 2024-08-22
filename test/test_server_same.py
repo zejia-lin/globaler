@@ -56,7 +56,7 @@ def client(proto_factory):
 
 
 def same_proc():
-    proto = SharedMemProto(mp.Queue)
+    proto = SharedMemProto()
     mp.Process(target=serve, args=(proto,)).start()
     time.sleep(1)
     mp.Process(target=client, args=(proto,)).start()

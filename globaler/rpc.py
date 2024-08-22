@@ -1,9 +1,9 @@
 from functools import wraps, partial
 from multiprocessing.connection import Connection
 import select
-from typing import ParamSpec, TypeVar, Union, Generic, Type
+from typing import ParamSpec, TypeVar, Union, Generic, Type, List
 import multiprocessing as mp
-import multiprocessing.shared_memory as shm
+import multiprocessing.shared_memory as smem
 import pickle
 import typing
 import zmq
@@ -22,9 +22,6 @@ from .logger import get_logger
 T = TypeVar("T")
 _pickler = pickle
 logger = get_logger(logging.INFO)
-from multiprocessing import shared_memory as smem
-
-smem.SharedMemory
 
 
 def shorten_large_obj(obj, max_len=100):
@@ -93,9 +90,7 @@ class ZmqProto(ProtoBase):
 
     async def recv_multipart(self):
         identity, message = await self.socket.recv_multipart()
-        logger.debug(
-            f"  Got message '{shorten_large_obj(message)}' from {identity.hex()}"
-        )
+        logger.debug(f"  Got message '{shorten_large_obj(message)}' from {identity.hex()}")
         return identity, message
 
     async def send(self, message):
@@ -160,55 +155,84 @@ class PipeProto(ProtoBase):
 
 
 class SharedMemProto(ProtoBase):
-    def __init__(self, queue_factory=mp.Queue, capacity=10 * 1024 * 1024):
-        self.capacity = capacity
-        self.server_write = shm.SharedMemory("liz.rpc_server_write", True, capacity)
-        self.client_write = shm.SharedMemory("liz.rpc_client_write", True, capacity)
-        self.server_queue = queue_factory()
-        self.client_queue = queue_factory()
+    def __init__(self, size_per_slot=10 * 1024 * 1024, num_slots=10):
+        self.size_per_slot = size_per_slot
+        self.num_slots = num_slots
+        self.server_queue = mp.Queue()
+        self.client_queue = mp.Queue()
+        self.server_slots = [
+            smem.SharedMemory(f"liz.rpc_server_slot_{i}", True, size_per_slot) for i in range(num_slots)
+        ]
+        self.client_slots = [
+            smem.SharedMemory(f"liz.rpc_client_slot_{i}", True, size_per_slot) for i in range(num_slots)
+        ]
+
+        # Warm up
         for i in range(5):
-            self.server_write.buf[:] = b"\x00" * self.capacity
-            x = bytes(self.server_write.buf[:])
-            self.client_write.buf[:] = b"\x00" * self.capacity
-            x = bytes(self.server_write.buf[:])
+            for slot in self.server_slots:
+                slot.buf[:] = b"\x00" * self.size_per_slot
+                x = bytes(slot.buf[:])
+                assert x == b"\x00" * self.size_per_slot
+            for slot in self.client_slots:
+                slot.buf[:] = b"\x00" * self.size_per_slot
+                x = bytes(slot.buf[:])
+                assert x == b"\x00" * self.size_per_slot
 
     def __del__(self):
-        self.server_write.close()
-        self.server_write.unlink()
-        self.client_write.close()
-        self.client_write.unlink()
+        for i in range(self.num_slots):
+            self.server_slots[i].close()
+            self.server_slots[i].unlink()
+            self.client_slots[i].close()
+            self.client_slots[i].unlink()
 
-    def establish(self, *args, **kwargs):
-        return self.RealSharedMem(
-            self.client_write, self.server_write, self.client_queue, self.server_queue
-        )
+    def establish(self):
+        return self.RealSharedMem(self.client_slots, self.server_slots, self.client_queue, self.server_queue)
 
-    def connect(self, *args, **kwargs):
-        return self.RealSharedMem(
-            self.server_write, self.client_write, self.server_queue, self.client_queue
-        )
+    def connect(self):
+        return self.RealSharedMem(self.server_slots, self.client_slots, self.server_queue, self.client_queue)
 
     class RealSharedMem(ProtoBase):
 
+        FLAG_SZ = 4
+        NO_MESSAGE = int.to_bytes(0, FLAG_SZ)
+        HAS_MESSAGE = int.to_bytes(2**30 + 1, FLAG_SZ)
+
         def __init__(
             self,
-            read_shm: smem.SharedMemory,
-            write_shm: smem.SharedMemory,
-            read_offset,
-            write_offset,
+            read_shm: List[smem.SharedMemory],
+            write_shm: List[smem.SharedMemory],
+            read_offsets: mp.Queue,
+            write_offsets: mp.Queue,
         ):
-            self.read_shm = read_shm
-            self.write_shm = write_shm
-            self.read_offset = read_offset
-            self.write_offset = write_offset
+            """First byte of the memory marks if there is unread message"""
+            self.read_slots = read_shm
+            self.write_slots = write_shm
+            self.read_offsets = read_offsets
+            self.write_offsets = write_offsets
+            self.get_read_offset_async = make_async(self.read_offsets.get)
+            if len(read_shm) != len(write_shm):
+                raise ValueError("Number of read and write slots must match.")
+            self.num_slots = len(read_shm)
+            self.size_per_slot = read_shm[0].size
+            for i in range(self.num_slots):
+                if (read_shm[i].size != self.size_per_slot) or (write_shm[i].size != self.size_per_slot):
+                    raise ValueError("Shared memory slot sizes should be same.")
+            self.read_counter = 0
+            self.write_counter = 0
 
         def __del__(self):
-            self.read_shm.close()
-            self.write_shm.close()
+            for i in range(self.num_slots):
+                self.read_slots[i].close()
+                self.write_slots[i].close()
 
         async def recv(self):
-            offset = self.read_offset.get()
-            message = bytes(self.read_shm.buf[:offset])
+            self.read_counter //= self.num_slots
+            slot = self.read_slots[self.read_counter]
+            self.read_counter += 1
+
+            offset = await self.get_read_offset_async()
+            message = bytes(slot.buf[self.FLAG_SZ : offset + self.FLAG_SZ])
+            slot.buf[:self.FLAG_SZ] = self.NO_MESSAGE
             return message
 
         async def recv_multipart(self):
@@ -216,12 +240,21 @@ class SharedMemProto(ProtoBase):
             return None, message
 
         async def send(self, message):
-            msg_sz = len(message)
-            if msg_sz > self.write_shm.size:
-                raise ValueError("Message size exceeds shared memory capacity.")
+            self.write_counter //= self.num_slots
+            slot = self.write_slots[self.write_counter]
+            self.write_counter += 1
 
-            self.write_shm.buf[:msg_sz] = message
-            self.write_offset.put(msg_sz)
+            msg_sz = len(message)
+            if msg_sz > self.size_per_slot:
+                raise ValueError(f"Message size {msg_sz} bytes exceeds shared memory capacity {self.size_per_slot}.")
+
+            if bytes(slot.buf[: self.FLAG_SZ]) != self.NO_MESSAGE:
+                print(self.NO_MESSAGE, bytes(slot.buf[: self.FLAG_SZ]))
+                raise ValueError(f"Running out of shared memory slots {slot.buf[:self.FLAG_SZ]}.")
+
+            slot.buf[:self.FLAG_SZ] = self.HAS_MESSAGE
+            slot.buf[self.FLAG_SZ : msg_sz + self.FLAG_SZ] = message
+            self.write_offsets.put(msg_sz)
 
         async def send_multipart(self, message):
             await self.send(message[1])
