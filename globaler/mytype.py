@@ -1,9 +1,19 @@
-import types
+from enum import Enum
 
+class JSONSerializableEnum(Enum):
+    def __str__(self):
+        """Serialize as the enum's name"""
+        return self.name
 
-def is_class_method(obj):
-    return isinstance(obj, types.MethodType)
+    def __repr__(self):
+        """Provide a representation that is also JSON serializable"""
+        return f'"{self.name}"'
 
-def is_regular_function(obj):
-    return isinstance(obj, types.FunctionType)
+    @classmethod
+    def from_json(cls, value):
+        """eserialize from a string name to the enum instance"""
+        return cls[value]
 
+    def to_json(self):
+        """Convert to a JSON-compatible format (string in this case)"""
+        return self.name
