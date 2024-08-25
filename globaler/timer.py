@@ -51,7 +51,6 @@ class TimeRecord:
             self.cuda_duration = self.start_event.elapsed_time(self.end_event)
             self.metadata.pop(self.CUDA_STREAM_KEY)
             self.metadata["cuda"] = self.cuda_duration
-            print(f"YES CUDA DURATION IS {self.cuda_duration}, {self.metadata['cuda']}")
 
     def add(self, record):
         record.parent = self
@@ -72,7 +71,6 @@ class TimeRecord:
         return self.end - self.start
 
     def to_dict(self):
-        print(f"to_dict: {self.metadata}")
         return {
             "index": self.index,
             "uid": self.uid,
@@ -120,8 +118,11 @@ class Timer(DebugOnly):
         self.counter = 0
         self.stash_dict: Dict[str, TimeRecord] = {}
 
-    def _last_record(self):
-        return next(reversed(self.runnings.values()))
+    def _last_n_record(self, n):
+        rev = reversed(self.runnings.values())
+        for i in range(n):
+            ret = next(rev)
+        return ret
 
     def stash(self, key: str, record: TimeRecord):
         self.stash_dict[key] = record
@@ -141,11 +142,11 @@ class Timer(DebugOnly):
         cur = TimeRecord(start=time.time(), name=name, metadata=metadata, index=self.counter, uid=uid)
         self.runnings[uid] = cur
         if parent is not None:
-            self.parent.add(cur)
+            parent.add(cur)
         elif len(self.runnings) == 1:
             self.records.append(cur)
         else:
-            self._last_record().add(cur)
+            self._last_n_record(2).add(cur)
         return cur
 
     def stop(self, synchronizable=None, record: TimeRecord = None):
@@ -154,7 +155,7 @@ class Timer(DebugOnly):
         if synchronizable is not None:
             synchronizable.synchronize()
         if record is None:
-            record = self._last_record()
+            record = self._last_n_record(1)
         record.stop(time.time())
         self.runnings.pop(record.uid)
 
