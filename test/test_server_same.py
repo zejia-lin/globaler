@@ -6,7 +6,6 @@ import time
 import multiprocessing as mp
 
 from globaler import RPCClient, RPCServer, ZmqProto
-from globaler.rpc import PipeProto, SharedMemProto
 
 class MyClass:
     async def getpid(self):
@@ -56,7 +55,7 @@ def client(proto_factory):
 
 
 def same_proc():
-    proto = SharedMemProto()
+    proto = ZmqProto()
     mp.Process(target=serve, args=(proto,)).start()
     time.sleep(1)
     mp.Process(target=client, args=(proto,)).start()

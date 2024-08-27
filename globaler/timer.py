@@ -11,21 +11,34 @@ from .enabler import DebugOnly
 
 
 class TimeRecord:
-    
-    CUDA_STREAM_KEY = "_cuda_stream"
-    
-    def __init__(self, *, start: float, name=None, metadata: dict = None, index: int = None, uid: str = None):
-        self.name = name or "unamed"
+
+    def __init__(
+        self,
+        *,
+        start: float,
+        name=None,
+        metadata: dict = None,
+        index: int = None,
+        uid: str = None,
+        cuda=False,
+        stream: torch.cuda.Stream = None,
+    ):
+        self.uid = uid or str(uuid.uuid4())
+        self.name = name or self.uid
         self.start = start
         self.metadata = metadata
         self.index = index
-        self.uid = uid or str(uuid.uuid4())
+        self.cuda = cuda
+        self.stream = stream
         self.end: float = 0
         self.cuda_duration = None
         self.childs = []
         self.parent = None
-        if metadata and self.CUDA_STREAM_KEY in metadata:
-            self.stream = metadata[self.CUDA_STREAM_KEY]
+        if cuda:
+            if metadata is None:
+                self.metadata = {}
+            if self.stream is None:
+                self.stream = torch.cuda.current_stream()
             self.start_event = torch.cuda.Event(enable_timing=True)
             self.end_event = torch.cuda.Event(enable_timing=True)
             self.start_event.record(self.stream)
@@ -42,14 +55,10 @@ class TimeRecord:
 
     def stop(self, end: float):
         self.end = end
-        if (
-            self.metadata
-            and self.CUDA_STREAM_KEY in self.metadata
-        ):
+        if self.cuda:
             self.end_event.record(self.stream)
             self.end_event.synchronize()
             self.cuda_duration = self.start_event.elapsed_time(self.end_event)
-            self.metadata.pop(self.CUDA_STREAM_KEY)
             self.metadata["cuda"] = self.cuda_duration
 
     def add(self, record):
@@ -130,16 +139,21 @@ class Timer(DebugOnly):
     def unstash(self, key: str):
         return self.stash_dict.pop(key)
 
-    def start(self, name: str = None, metadata: Dict[str, Any] = None, parent=None, cuda=False, stream=None):
+    def start(
+        self,
+        name: str = None,
+        metadata: Dict[str, Any] = None,
+        parent=None,
+        cuda=False,
+        stream: torch.cuda.Stream = None,
+    ):
         self.counter += 1
         uid = str(uuid.uuid4())
         if name is None:
             name = f"#{self.counter}"
-        if cuda:
-            if metadata is None:
-                metadata = {}
-            metadata[TimeRecord.CUDA_STREAM_KEY] = stream
-        cur = TimeRecord(start=time.time(), name=name, metadata=metadata, index=self.counter, uid=uid)
+        cur = TimeRecord(
+            start=time.time(), name=name, metadata=metadata, index=self.counter, uid=uid, cuda=cuda, stream=stream
+        )
         self.runnings[uid] = cur
         if parent is not None:
             parent.add(cur)

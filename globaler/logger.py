@@ -1,15 +1,18 @@
 import logging
 
 
-def get_logger(level):
+def get_logger(level, name=__name__):
     if __debug__:
-        logger = logging.getLogger(__name__)
-        logger.setLevel(level)  # Set the logger level to DEBUG
-        console_handler = logging.StreamHandler()
-        console_handler.setLevel(logging.NOTSET)
-        formatter = logging.Formatter("[%(levelname)s] %(message)s")
-        console_handler.setFormatter(formatter)
-        logger.addHandler(console_handler)
+        logger = logging.getLogger(name)
+        logger.setLevel(level)
+        
+        if not logger.handlers:
+            console_handler = logging.StreamHandler()
+            console_handler.setLevel(logging.NOTSET)
+            formatter = logging.Formatter("%(levelname)s %(asctime)s %(filename)s:%(lineno)d] %(message)s")
+            console_handler.setFormatter(formatter)
+            logger.addHandler(console_handler)
+        
         return logger
 
     class FakeLogger:
