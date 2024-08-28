@@ -2,6 +2,7 @@ import asyncio
 import inspect
 import io
 import logging
+import multiprocessing as mp
 import os
 import pickle
 import signal
@@ -9,7 +10,7 @@ import traceback
 from functools import wraps
 from multiprocessing.connection import Connection
 from multiprocessing.reduction import ForkingPickler
-from typing import Type, TypeVar, Union
+from typing import List, Type, TypeVar, Union
 
 import zmq
 import zmq.asyncio
@@ -99,26 +100,77 @@ class ZmqProto(ProtoBase):
 
 
 class QueueProto(ProtoBase):
-    def __init__(self, queue_factory):
-        self.queue = queue_factory()
+    def __init__(self, queue_factory: Type[mp.SimpleQueue], max_clients=1):
+        self.server_queue = queue_factory()
+        self.max_clients = max_clients
+        self.client_queues: List[mp.SimpleQueue] = []
+        self.clients: List["QueueProto.ClientQueue"] = []
+        self.availabel_clients = set(range(max_clients))
+        for identity in range(max_clients):
+            self.client_queues.append(queue_factory())
+            self.clients.append(self.ClientQueue(identity, self.client_queues[identity], self.server_queue, self))
+        self.server = self.ServerQueue(self.server_queue, self.client_queues)
 
-    async def recv(self):
-        message = self.queue.get()
-        logger.debug(f"Get {message}")
-        return message
+    def establish(self):
+        return self.server
 
-    async def recv_multipart(self):
-        message = self.queue.get()
-        logger.debug(f"Get {message}")
-        return None, message
+    def connect(self):
+        if len(self.availabel_clients) == 0:
+            raise RuntimeError("No available clients")
+        identity = self.availabel_clients.pop()
+        return self.clients[identity]
 
-    async def send(self, message):
-        logger.debug(f"Sending {message}")
-        self.queue.put(message)
+    def disconnect(self, identity):
+        self.availabel_clients.add(identity)
 
-    async def send_multipart(self, message):
-        logger.debug(f"Sending {message}")
-        await self.send(message[1])
+    class ServerQueue:
+        def __init__(self, read: mp.SimpleQueue, writes: List[mp.SimpleQueue]):
+            self.read = read
+            self.writes = writes
+
+        async def recv(self):
+            raise NotImplementedError("Server does not support recv")
+
+        async def recv_multipart(self):
+            identity, message = self.read.get()
+            logger.debug(f"Get {message} from {identity}")
+            return identity, message
+
+        async def send(self, message):
+            raise NotImplementedError("Server does not support send")
+
+        async def send_multipart(self, message):
+            identity, message = message
+            logger.debug(f"Sending {message} to {identity}")
+            self.writes[identity].put(message)
+
+    class ClientQueue:
+        def __init__(self, identity, read: mp.SimpleQueue, write: mp.SimpleQueue, that):
+            self.identity = identity
+            self.read = read
+            self.write = write
+            self.that = that
+
+        async def recv(self):
+            message = self.read.get()
+            logger.debug(f"Get {message}")
+            return message
+
+        async def recv_multipart(self):
+            raise NotImplementedError("Client does not support multipart message")
+
+        async def send(self, message):
+            logger.debug(f"Sending {message}")
+            self.write.put((self.identity, message))
+
+        async def send_multipart(self, message):
+            raise NotImplementedError("Client does not support multipart message")
+
+        def close(self):
+            self.that.disconnect(self.identity)
+
+        def __del__(self):
+            self.close()
 
 
 class PipeProto(ProtoBase):
@@ -209,7 +261,7 @@ class RPCServer:
         try:
             await self.server_task
         except asyncio.CancelledError:
-            print("Server task was cancelled.")
+            logger.critical("Server task was cancelled.")
         finally:
             self.loop.remove_signal_handler(signal.SIGINT)
             self.loop.remove_signal_handler(signal.SIGTERM)
@@ -224,12 +276,15 @@ class RPCServer:
                     self._func_dct[name] = make_async(method)
 
 
-def RPCClient(cls: Type[T], proto: ProtoBase) -> T:
+def RPCClient(cls: Type[T], proto: ProtoBase = None) -> T:
     class RPCClientProxy:
-        def __init__(self, target_cls: Type[T], proto: ProtoBase):
+        def __init__(self, target_cls: Type[T], proto: ProtoBase = None):
             self.target_cls = target_cls
             self.proto = proto
             self._init_func_dct()
+
+        def connect(self, proto):
+            self.proto = proto
 
         def _init_func_dct(self):
             for name, value in self.target_cls.__dict__.items():
@@ -239,9 +294,21 @@ def RPCClient(cls: Type[T], proto: ProtoBase) -> T:
                     proxy_method.__signature__ = inspect.signature(value)
                     setattr(self.__class__, name, proxy_method)
 
+                    proxy_method = self._make_rpc_sync_wrapper(name, value)
+                    proxy_method.__name__ = f"{name}_sync"
+                    proxy_method.__signature__ = inspect.signature(value)
+                    setattr(self.__class__, f"{name}_sync", proxy_method)
+
         async def call_rpc(self, name, *args, **kwargs):
             await self.proto.send((name, args, kwargs))
             result = await self.proto.recv()
+            if isinstance(result, Exception):
+                raise result
+            return result
+
+        def call_rpc_sync(self, name, *args, **kwargs):
+            asyncio.run(self.proto.send((name, args, kwargs)))
+            result = asyncio.run(self.proto.recv())
             if isinstance(result, Exception):
                 raise result
             return result
@@ -254,5 +321,14 @@ def RPCClient(cls: Type[T], proto: ProtoBase) -> T:
             rpc_method.__signature__ = inspect.signature(method)
             rpc_method.__name__ = name
             return rpc_method
+
+        def _make_rpc_sync_wrapper(self, name, method):
+            @wraps(method)
+            def rpc_method_sync(self, *args, **kwargs):
+                return self.call_rpc_sync(name, *args, **kwargs)
+
+            rpc_method_sync.__signature__ = inspect.signature(method)
+            rpc_method_sync.__name__ = f"{name}_sync"
+            return rpc_method_sync
 
     return RPCClientProxy(cls, proto)

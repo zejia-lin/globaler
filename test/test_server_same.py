@@ -6,6 +6,7 @@ import time
 import multiprocessing as mp
 
 from globaler import RPCClient, RPCServer, ZmqProto
+from globaler.rpc import QueueProto
 
 class MyClass:
     async def getpid(self):
@@ -24,21 +25,19 @@ class MyClass:
         return f"Received {len(data)} bytes of data"
 
 
-def serve(proto_factory):
-    proto = proto_factory.establish()
+def serve(proto):
     server = RPCServer(MyClass(), proto)
     asyncio.run(server.run())
 
 
-def client(proto_factory):
+def client(proto):
     repeat = 10
-    proto = proto_factory.connect()
     cc = RPCClient(MyClass, proto)
     print(f"Local pid {os.getpid()}")
-    print(f"Remote pid {asyncio.run(cc.getpid())}")
-    print(f"Remote pid sync {asyncio.run(cc.getpid_sync())}")
-    print(f"Remote add {asyncio.run(cc.add(1, 2))}")
-    print(f"Remote add sync {asyncio.run(cc.add_sync(1, 2))}")
+    print(f"{os.getpid()}: Remote pid {asyncio.run(cc.getpid())}")
+    print(f"{os.getpid()}: Remote pid sync {asyncio.run(cc.getpid_sync())}")
+    print(f"{os.getpid()}: Remote add {asyncio.run(cc.add(1, 2))}")
+    print(f"{os.getpid()}: Remote add sync {asyncio.run(cc.add_sync(1, 2))}")
 
     large_data = "xxx" * 10**3
     print("dta len", len(large_data))
@@ -50,15 +49,18 @@ def client(proto_factory):
         response = asyncio.run(cc.send_large_data(large_data))
     end_time = time.time()
 
-    print(f"Send and receive {sys.getsizeof(pickle.dumps(large_data)) / 1e6} MB of data: {(end_time - start_time) / repeat} seconds")
-    print(f"Response: {response}")
+    print(f"{os.getpid()}: Send and receive {sys.getsizeof(pickle.dumps(large_data)) / 1e6} MB of data: {(end_time - start_time) / repeat} seconds")
+    print(f"{os.getpid()}: Response: {response}")
+    print(f"{os.getpid()}: Finished")
 
 
 def same_proc():
-    proto = ZmqProto()
-    mp.Process(target=serve, args=(proto,)).start()
+    ctx = mp.get_context("spawn")
+    proto = QueueProto(ctx.SimpleQueue, 2)
+    ctx.Process(target=serve, args=(proto.establish(),)).start()
     time.sleep(1)
-    mp.Process(target=client, args=(proto,)).start()
+    ctx.Process(target=client, args=(proto.connect(),)).start()
+    ctx.Process(target=client, args=(proto.connect(),)).start()
     exit(0)
 
 
